@@ -1,0 +1,354 @@
+---
+title: "Economic scenario generator using Lévy Process"
+output:
+  word_document: default
+  html_notebook: default
+  pdf_document: default
+---
+# Introduction
+Common approaches for generating economic scenarios in the real world assume that stock market returns follow a normal distribution. This simplification allows for a simple analytical solution that is easy to implement. However, the reality is quite different, as returns exhibit a right-skewness and thicker distribution tails compared to the Gaussian framework. This indicates a higher probability of costly extreme events occurring compared to what is considered in the Black-Scholes model.
+
+To account for these extreme events, Levy processes are considered, which incorporate jumps with a finite or infinite number and amplitude, leading to the realization of extreme events.
+
+### CAC 40 index
+```{r}
+library(quantmod)
+```
+
+```{r}
+cac.40 <- getSymbols("^FCHI",src="yahoo",auto.assign=FALSE)
+cac.40 <- na.omit(cac.40)
+```
+```{r}
+head(cac.40)
+```
+```{r}
+close.price <- cac.40$FCHI.Close
+```
+
+```{r}
+plot(x=1:length(close.price),y=close.price,type="l",xlab="Time",main="Price Trends and Historical Performance of CAC 40")
+```
+```{r}
+log.return <- diff(log(close.price))
+```
+
+```{r}
+plot(x=1:length(log.return),y=log.return,typ="l",xlab="Time",main="Log Returns of CAC 40")
+```
+
+```{r}
+summary(close.price)
+```
+```{r}
+var(close.price)
+```
+```{r}
+library(moments)
+```
+
+```{r}
+skewness(close.price)
+```
+```{r}
+kurtosis(close.price)
+```
+```{r}
+log.close.price <- log(close.price)
+hist(log.close.price,freq=F,xlab = "log Price of CAC 40",main="Histogram of Log Price of CAC 40")
+xfit <- seq(min(na.omit(log.close.price)),max(na.omit(log.close.price)),length=length(log.close.price))
+yfit <- dnorm(xfit,mean=mean(na.omit(log.close.price)),sd=sd(na.omit(log.close.price)))
+lines(xfit,yfit,col="blue",lwd=2)
+# Kernel Density Estimation
+lines(density(na.omit(log.close.price)),col="red",lwd=2)
+legend("topright", legend = c("Empirical","Theoretical"), 
+       col = c("red", "blue"), lty = 1, bty = "n")
+```
+```{r}
+qqnorm(log.close.price, pch = 1, frame = FALSE)
+qqline(log.close.price, col = "steelblue", lwd = 2)
+```
+```{r}
+ks.test(log.close.price,"pnorm")
+```
+```{r}
+hist(log.return,ylim=c(0,45),freq=F,xlab = "Log returns of CAC 40",main="Histogram of Log Returns of CAC 40")
+mu <- mean(na.omit(log.return))
+sigma <- sd(na.omit(log.return))
+xfit <- seq(min(na.omit(log.return)),max(na.omit(log.return)),length=length(log.return))
+yfit <- dnorm(xfit,mean=mu,sd=sigma)
+lines(xfit,yfit,col="blue",lwd=2)
+# Kernel Density Estimation
+lines(density(na.omit(log.return)),col="red",lwd=2)
+legend("topright", legend = c("Empirical","Theoretical"), 
+       col = c("red", "blue"), lty = 1,lwd=2, bty = "n")
+```
+
+```{r}
+qqnorm(log.return, pch = 1, frame = FALSE)
+qqline(log.return, col = "steelblue", lwd = 2)
+```
+```{r}
+library(tseries)
+```
+
+```{r}
+jarque.bera.test(na.omit(log.return))
+```
+```{r}
+ks.test(log.return,"pnorm")
+```
+We conclude that the normality assumption isn't valid for the CAC 40 prices, in fact we remark jumps in the time series of the CAC 40 prices.
+# Geometric Brownian Motion Calibration
+If we use Geometric Brownian Motion to simulate the CAC 40 price we'll get:
+$$
+\text{Let's denote the price of CAC 40 by }S_t \text{ at time t}\\
+\text{then  }{\frac {dS_t}{S_t}}=\mu \,dt+\sigma \,dW_t\, \\
+\text{The solution of such equation is : } S_{t}=S_{0}\exp \left(\left(\mu -{\frac {\sigma ^{2}}{2}}\right)t+\sigma W_{t}\right).
+$$
+Estimation of the drift and the volatility:(we suppose that the volatility is constant)
+$$
+\text{We have }  \frac{S_{t+\Delta_t}}{S_t} = \exp \left(\left(\mu -{\frac {\sigma ^{2}}{2}}\right)\Delta_t+\sigma (W_{t+\Delta_t} - W_t)\right). \\
+\text{Then }  log(\frac{S_{t+\Delta_t}}{S_t}) =  \left(\mu -{\frac {\sigma ^{2}}{2}}\right)\Delta_t+\sigma (W_{t+\Delta_t} - W_t) \sim N(\left(\mu -{\frac {\sigma ^{2}}{2}}\right)\Delta_t,\sigma^2 \Delta_t)\\
+\text{We denote by } X_t \text{ the log return of } S_t, \text{ and we have}:\\
+E(X) =\left(\mu -{\frac {\sigma ^{2}}{2}}\right)\Delta_t \text{ and } Var(X) = \sigma^2 \Delta_t \\
+\text{Then : } \sigma = \sqrt\frac{Var(X)}{\Delta_t} \text{ and } \mu = \frac{E(X)}{\Delta_t} + {\frac {\sigma ^{2}}{2}}
+
+$$
+```{r}
+dt <- 1/252
+sigma <- sqrt(var(na.omit(log.return))/dt)
+mu <- mean(na.omit(log.return))/dt + 0.5*(sigma**2)
+```
+
+```{r}
+c(mu, sigma)
+```
+Simulation:
+For the simulation, we first simulate an arithmetic brownian motion:
+$$
+R_t = \left(\mu -{\frac {\sigma ^{2}}{2}}\right)t+\sigma W_{t}\\
+\text{with drift } \mu -{\frac {\sigma ^{2}}{2}} \text{ and volatility } \sigma
+$$
+```{r}
+n <- length(close.price) 
+X <- numeric(n)
+X[1] <- 0 # t0 = 0
+for(i in 2:n){
+  X[i] <- X[i-1] + sigma*sqrt(dt)*rnorm(1) + (mu-0.5*(sigma**2))*dt
+}
+```
+
+```{r}
+plot(X,type="l",main='Sample Path of a Brownian Motion')
+```
+
+```{r}
+S_0 <- as.integer(close.price[1])
+S <- S_0*exp(X)
+```
+
+```{r}
+plot(S,type="l",main="Sample Path of a  Geometric Brownian Motion")
+```
+```{r}
+plot(as.numeric(diff(log(S))),type="l",ylab="Log returns",main="Log Returns of the Simulated Geometric Brownian Motion")
+```
+```{r}
+plot(density(diff(log(S))),ylim=c(0,45),main="Density Plot of Log Returns",col="blue")
+lines(density(na.omit(log.return)),col="red")
+legend("topright", legend = c("Empirical","Theoretical"), 
+       col = c("red", "blue"), lty = 1,lwd=2, bty = "n")
+```
+```{r}
+plot(ecdf(diff(log(S))),col="blue",main="Cumulative Density plot for Log Returns")
+lines(ecdf(na.omit(as.vector(log.return$FCHI.Close))),col="red")
+legend("toplef", legend = c("Empirical","Theoretical"), 
+       col = c("red", "blue"), lty = 1,lwd=2, bty = "n")
+```
+
+Of course, GBM is just a model and no model is a perfect representation of reality. In particular, GBM uses constant volatility, which is clearly at odds with reality. It also doesn’t account for jumps, such as those caused by news.
+# Exponontial Lévy process
+To account for jumps we need a stochastics that has jumps, which is a poisson process and combine it with a brownian motion. 
+$$
+\text{We model } S_t \text{ using an expontiontial Levy process which has the following form :}\\ 
+S_t = S_0*e^{L_t} \\
+L_t \text{ is Jump-Diffusion process and it has the following form} \\
+L_{t}  =\gamma t+\sigma W_{t}+\sum_{i=1}^{N_{t}} Y_{i}\\
+\text{Where } W_t \text{ is a brownian motion, } N_t  \text{ is a poisson process with intensity } \lambda \text{, }\\ (Y_i)_{i \in \mathbb{N^{*}}} \text{ is an iid random variable describing the jumps for the merton model it is}\\
+\text{the normal distribution: }  Y_{i} \sim N\left(\mu, \delta^{2}\right) \\
+\text{The probabilty density function of } L_t \text{ is the following :}
+f_{t}(x)=e^{-\lambda t} \sum_{k=0}^{\infty} \frac{(\lambda t)^{k} \exp \left\{-\frac{(x-\gamma t-k \mu)^{2}}{2\left(\sigma^{2} t+k \delta^{2}\right)}\right\}}{k ! \sqrt{2 \pi\left(\sigma^{2} t+k \delta^{2}\right)}} .
+\\
+\text{And we have: } X_t = log(\frac{S_{t+\Delta_t}}{S_t}) = L_{\Delta_t}  
+$$
+
+## Parameter estimation
+We need to estimate five parameters :
+$$
+\gamma, \sigma, \lambda, \mu \text{ and } \delta
+$$
+We use maximum likelihood estimation via an optimization algorithm, since it is difficult to solve it by hands.
+```{r}
+dt <- 1/252
+N <- 1e3
+X <- na.omit(log.return)
+```
+
+```{r}
+merton.pde <- function(x,gamma,sigma,lambda,mu,delta){
+  Density.merton <- 0
+  for(k in 0:N){
+    a <- ((x-gamma*dt-k*mu)^2)/(2*(dt*(sigma^2)+k*(delta^2)))
+    b <- 2*pi*(dt*(sigma^2)+k*(delta^2))
+    c <- ((lambda*dt)^k)/factorial(k)
+    Density.merton <- Density.merton + c*exp(-a)/sqrt(b)
+  }
+  return(exp(-lambda*dt)*Density.merton)
+}
+```
+
+```{r}
+merton.mle <- function(gamma,sigma,lambda,mu,delta){
+  return(-sum(log(merton.pde(X,gamma,sigma,lambda,mu,delta))))
+}
+```
+
+```{r}
+library(bbmle)
+```
+We initialize sarting values of the parameters :
+```{r}
+gamma <- 0.1
+sigma <- 0.01
+lambda <- 252
+mu <- 0.01
+delta <- 0.01
+```
+
+```{r}
+est.merton <- bbmle::mle2(minuslog=merton.mle, start=list(gamma=gamma,sigma=sigma,lambda=lambda,mu=mu,delta= delta),method="Nelder-Mead")
+```
+
+
+```{r}
+summary(est.merton)
+```
+```{r}
+AIC(est.merton)
+```
+```{r}
+coef(est.merton)
+```
+
+```{r}
+gamma <- as.numeric(coef(est.merton)[1])
+sigma <- abs(as.numeric(coef(est.merton)[2]))
+lambda <- as.numeric(coef(est.merton)[3])
+mu <- as.numeric(coef(est.merton)[4])
+delta <- abs(as.numeric(coef(est.merton)[5]))
+```
+
+
+```{r}
+x <- na.omit(log.return)
+hist(x,ylim=c(0,45),breaks=100,freq = F,xlab = "log returns of CAC 40",main="Histogram of log returns of CAC 40")
+xfit <- seq(min(x),max(x),length=length(x))
+yfit <- merton.pde(xfit,gamma,sigma,lambda,mu,delta)
+lines(xfit,yfit,col="blue",lwd=2)
+#Kernel Density Estimation
+lines(density(x),col="red",lwd=2)
+legend("topright", legend = c("Empirical","Theoretical"), 
+   col = c("red", "blue"), lty = 1,lwd=2, bty = "n")
+```
+
+```{r}
+plot(ecdf(as.vector(x)),col="red",main="Cumulative Density plot for Log Returns")
+lines(x=xfit,y=cumsum(yfit)/max(cumsum(yfit)),col="blue")
+legend("topleft", legend = c("Empirical","Theoretical"), 
+   col = c("red", "blue"), lty = 1,lwd=2, bty = "n")
+```
+Simulate a poisson process with intensity lambda:
+We need first to generate exponential inter-arrivals
+$$
+\text{Let } (X_i)_{i \in \mathbb{N^{*}}} \text{ be a sequence of independent exponential random variables all with mean } \mu = \frac{1}{\lambda}\\
+\text{Let } T_1 = X_1 \text{ be the time of first arrival} \\
+\text{Let } T_{n+1} = T_{n} + X_{n+1} \text{ be the arrival times } \forall n \in \mathbb{N^{*}}\\
+\text{Then we set } N_t = \sum_{n = 1}^{\infty} \mathbb{1}_{t ≥ T_n} \text{ the total number of arrivals by time t
+}
+$$
+```{r}
+dt <- 1/252
+expo <- 0
+poiss <- numeric(n)
+for(i in 1:n){
+  while(expo < i){
+    expo <- expo + rexp(n=1,rate=lambda*dt)
+    poiss[i] <- poiss[i] + 1
+  }
+}
+poiss <- cumsum(poiss)
+```
+
+```{r}
+plot(poiss,type = "S",col="blue",main="Poisson Process")
+```
+Simulation of the compound poisson process
+
+```{r}
+compound.poiss <- numeric(n)
+for(j in 1:n){
+  pois.sim <- rpois(1,lambda*dt)
+  compound.poiss[j] <- rnorm(n=1,mean=mu*pois.sim,sd=delta*sqrt(pois.sim))
+}
+compound.poiss <- cumsum(compound.poiss)
+```
+
+```{r}
+plot(compound.poiss,type = "S",col="blue",main="Compound Poisson Process")
+```
+
+Simulation of the exponential Lévy process
+
+```{r}
+levy.process <- numeric(n)
+BM <- numeric(n)
+BM[1] <- log(S_0)
+levy.process[1] <- BM[1] + compound.poiss[1]
+for(i in 2:n){
+  BM[i] <- BM[i-1] + sigma*sqrt(dt)*rnorm(1) + gamma*dt
+  levy.process[i] <- compound.poiss[i] + BM[i] 
+}
+
+```
+
+```{r}
+levy.process <- numeric(n)
+BM <- numeric(n)
+BM[1] <- 0
+for(i in 2:n){
+  BM[i] <- BM[i-1] + sigma*sqrt(dt)*rnorm(1) + gamma*dt
+   
+}
+levy.process <- compound.poiss + BM
+```
+```{r}
+plot(BM,type="l",main="Brownian Motion Process")
+```
+
+```{r}
+plot(levy.process,type="l",main="Lévy Process")
+```
+```{r}
+levy.prices <- S_0*exp(levy.process)
+```
+
+
+```{r}
+plot(levy.prices,type="l",main="Exponential Lévy Process")
+```
+# Conclusion 
+
+In conclusion, this project highlights the limitations of traditional economic scenario generation models that assume normal distributions for stock market returns. The real-world data often exhibits non-Gaussian characteristics, such as right-skewness and thicker tails, indicating a greater likelihood of extreme and costly events. To address these shortcomings, the consideration of Levy processes, which incorporate jumps with varying amplitudes and frequencies, provides a more realistic framework for capturing extreme events in economic scenarios. This approach enhances our ability to assess and manage risk in a world where financial markets are subject to unexpected and extreme fluctuations.
+
+
